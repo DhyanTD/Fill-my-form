@@ -9,7 +9,19 @@ document.addEventListener("DOMContentLoaded", function () {
   const aiData = document.getElementById("aiData");
   const copyBtn = document.getElementById("copyBtn");
 
+  // New AI response elements
+  const aiResponseSection = document.getElementById("aiResponseSection");
+  const aiResponseInput = document.getElementById("aiResponseInput");
+  const parseJsonBtn = document.getElementById("parseJsonBtn");
+  const parseTextBtn = document.getElementById("parseTextBtn");
+  const clearResponseBtn = document.getElementById("clearResponseBtn");
+  const fillStatus = document.getElementById("fillStatus");
+  const fillResults = document.getElementById("fillResults");
+  const fillSummary = document.getElementById("fillSummary");
+  const debugBtn = document.getElementById("debugBtn");
+
   let currentData = null;
+  let lastFillResults = null;
 
   // Show status message
   function showStatus(message, type) {
@@ -120,6 +132,9 @@ document.addEventListener("DOMContentLoaded", function () {
 
     aiData.textContent = JSON.stringify(aiReadyData, null, 2);
     aiSection.style.display = "block";
+
+    // Show AI response input section
+    aiResponseSection.style.display = "block";
   }
 
   // Copy JSON data to clipboard
@@ -139,8 +154,204 @@ document.addEventListener("DOMContentLoaded", function () {
     }
   });
 
-  // Example function to fill fields (can be called from console or extended)
-  window.fillFormFields = async function (suggestions) {
+  // Parse JSON response and fill fields
+  parseJsonBtn.addEventListener("click", async function () {
+    const responseText = aiResponseInput.value.trim();
+    if (!responseText) {
+      showStatus("Please paste AI response first", "error");
+      return;
+    }
+
+    try {
+      parseJsonBtn.disabled = true;
+      parseJsonBtn.textContent = "🔄 Processing...";
+
+      const suggestions = parseAIResponse(responseText, "json");
+      if (suggestions.length > 0) {
+        await fillFormWithSuggestions(suggestions);
+      } else {
+        showStatus("No valid field suggestions found in response", "error");
+      }
+    } catch (error) {
+      showStatus("Error parsing AI response: " + error.message, "error");
+    } finally {
+      parseJsonBtn.disabled = false;
+      parseJsonBtn.textContent = "🎯 Parse & Fill (JSON)";
+    }
+  });
+
+  // Parse text response and fill fields
+  parseTextBtn.addEventListener("click", async function () {
+    const responseText = aiResponseInput.value.trim();
+    if (!responseText) {
+      showStatus("Please paste AI response first", "error");
+      return;
+    }
+
+    console.log(responseText, "suggestions resp");
+    try {
+      parseTextBtn.disabled = true;
+      parseTextBtn.textContent = "🔄 Processing...";
+
+      const suggestions = parseAIResponse(responseText, "text");
+      if (suggestions.length > 0) {
+        console.log(suggestions, "suggestions");
+        await fillFormWithSuggestions(suggestions);
+      } else {
+        showStatus(
+          "Could not extract field values from text response",
+          "error",
+        );
+      }
+    } catch (error) {
+      showStatus("Error parsing text response: " + error.message, "error");
+    } finally {
+      parseTextBtn.disabled = false;
+      parseTextBtn.textContent = "📝 Parse & Fill (Text)";
+    }
+  });
+
+  // Clear AI response input
+  clearResponseBtn.addEventListener("click", function () {
+    aiResponseInput.value = "";
+    fillStatus.style.display = "none";
+    showStatus("Response input cleared", "success");
+  });
+
+  // Parse AI response based on format
+  function parseAIResponse(responseText, format) {
+    if (format === "json") {
+      return parseJSONResponse(responseText);
+    } else {
+      return parseTextResponse(responseText);
+    }
+  }
+
+  // Parse JSON formatted AI response
+  function parseJSONResponse(responseText) {
+    try {
+      // Try to parse as direct JSON array
+      let parsed = JSON.parse(responseText);
+
+      // Handle different response formats
+      if (Array.isArray(parsed)) {
+        return validateSuggestions(parsed);
+      } else if (parsed.suggestions && Array.isArray(parsed.suggestions)) {
+        return validateSuggestions(parsed.suggestions);
+      } else if (parsed.fields && Array.isArray(parsed.fields)) {
+        return validateSuggestions(parsed.fields);
+      } else if (parsed.data && Array.isArray(parsed.data)) {
+        return validateSuggestions(parsed.data);
+      } else {
+        throw new Error(
+          "Invalid JSON format: expected array of field suggestions",
+        );
+      }
+    } catch (error) {
+      // Try to extract JSON from text if it's embedded
+      const jsonMatch = responseText.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        try {
+          const extracted = JSON.parse(jsonMatch[0]);
+          return validateSuggestions(extracted);
+        } catch (e) {
+          throw new Error("Could not parse JSON: " + error.message);
+        }
+      }
+      throw new Error("Invalid JSON format: " + error.message);
+    }
+  }
+
+  // Parse text formatted AI response
+  function parseTextResponse(responseText) {
+    console.log("heere");
+    if (!currentData || !currentData.fields) {
+      throw new Error(
+        "No form data available. Please extract fields first....",
+      );
+    }
+
+    const suggestions = [];
+    const lines = responseText.split("\n");
+
+    // Try to match field labels/IDs with values in text
+    currentData.fields.forEach((field) => {
+      const fieldLabel = field.label.toLowerCase();
+      const fieldId = field.id;
+
+      // Look for patterns like "Email: john@example.com" or "Email Address: john@example.com"
+      for (let line of lines) {
+        const normalizedLine = line.toLowerCase();
+
+        // Pattern 1: "Label: Value"
+        if (normalizedLine.includes(fieldLabel + ":")) {
+          const value = line.split(":")[1]?.trim().replace(/['"]/g, "");
+          if (value) {
+            suggestions.push({ id: fieldId, suggestedValue: value });
+            break;
+          }
+        }
+
+        // Pattern 2: "Label - Value" or "Label = Value"
+        if (
+          normalizedLine.includes(fieldLabel + "-") ||
+          normalizedLine.includes(fieldLabel + "=")
+        ) {
+          const value = line.split(/[-=]/)[1]?.trim().replace(/['"]/g, "");
+          if (value) {
+            suggestions.push({ id: fieldId, suggestedValue: value });
+            break;
+          }
+        }
+
+        // Pattern 3: Field ID mentioned with value
+        if (normalizedLine.includes(fieldId.toLowerCase())) {
+          const parts = line.split(/[:=-]/);
+          if (parts.length > 1) {
+            const value = parts[1].trim().replace(/['"]/g, "");
+            if (value) {
+              suggestions.push({ id: fieldId, suggestedValue: value });
+              break;
+            }
+          }
+        }
+      }
+    });
+
+    return suggestions;
+  }
+
+  // Validate suggestion format
+  function validateSuggestions(suggestions) {
+    if (!Array.isArray(suggestions)) {
+      throw new Error("Expected array of suggestions");
+    }
+
+    return suggestions.filter((suggestion) => {
+      if (typeof suggestion !== "object" || !suggestion.id) {
+        return false;
+      }
+
+      // Handle different property names
+      if (
+        !suggestion.suggestedValue &&
+        !suggestion.value &&
+        !suggestion.answer
+      ) {
+        return false;
+      }
+
+      // Normalize property names
+      if (!suggestion.suggestedValue) {
+        suggestion.suggestedValue = suggestion.value || suggestion.answer;
+      }
+
+      return true;
+    });
+  }
+
+  // Fill form with AI suggestions
+  async function fillFormWithSuggestions(suggestions) {
     try {
       const [tab] = await chrome.tabs.query({
         active: true,
@@ -153,23 +364,125 @@ document.addEventListener("DOMContentLoaded", function () {
       });
 
       if (response && response.success) {
-        const successCount = Object.values(response.results).filter(
-          Boolean,
-        ).length;
-        showStatus(`Successfully filled ${successCount} fields!`, "success");
+        lastFillResults = response;
+        displayFillResults(
+          suggestions,
+          response.results,
+          response.detailedResults,
+          response.summary,
+        );
+        showStatus(
+          `Successfully filled ${response.summary.successful}/${response.summary.total} fields!`,
+          response.summary.successful === response.summary.total
+            ? "success"
+            : "error",
+        );
       } else {
-        showStatus("Error filling fields", "error");
+        throw new Error("Failed to fill fields");
       }
     } catch (error) {
       console.error("Error filling fields:", error);
-      showStatus("Error filling fields", "error");
+      showStatus("Error filling fields: " + error.message, "error");
     }
+  }
+
+  // Display fill results with enhanced information
+  function displayFillResults(suggestions, results, detailedResults, summary) {
+    // Display summary
+    fillSummary.innerHTML = `
+            <strong>Fill Summary:</strong> 
+            ${summary.successful} successful, 
+            ${summary.failed} failed out of ${summary.total} fields
+            ${summary.failed > 0 ? '<br><em>Click "Debug Failed Fields" below for details</em>' : ""}
+        `;
+
+    fillResults.innerHTML = "";
+
+    suggestions.forEach((suggestion) => {
+      const success = results[suggestion.id];
+      const detailResult = detailedResults[suggestion.id];
+      const field = currentData.fields.find((f) => f.id === suggestion.id);
+      const label = field ? field.label : suggestion.id;
+
+      const resultItem = document.createElement("div");
+      resultItem.className = `fill-result-item ${success ? "success" : "error"}`;
+
+      let errorInfo = "";
+      if (!success && detailResult && detailResult.error) {
+        errorInfo = `<div class="fill-result-error" style="font-size: 10px; color: #721c24; margin-top: 4px;">
+                    Error: ${detailResult.error}
+                </div>`;
+      }
+
+      resultItem.innerHTML = `
+                <div>
+                    <div class="fill-result-label">${label}</div>
+                    <div class="fill-result-value">"${suggestion.suggestedValue}"</div>
+                    ${errorInfo}
+                </div>
+                <div style="font-size: 16px;">${success ? "✅" : "❌"}</div>
+            `;
+
+      fillResults.appendChild(resultItem);
+    });
+
+    fillStatus.style.display = "block";
+  }
+
+  // Add auto-resize for textarea
+  aiResponseInput.addEventListener("input", function () {
+    this.style.height = "auto";
+    this.style.height = Math.min(this.scrollHeight, 200) + "px";
+  });
+
+  // Example function to fill fields (can be called from console or extended)
+  window.fillFormFields = async function (suggestions) {
+    return await fillFormWithSuggestions(suggestions);
   };
+
+  // Debug failed fields
+  debugBtn.addEventListener("click", async function () {
+    if (!lastFillResults) {
+      showStatus("No fill results to debug", "error");
+      return;
+    }
+
+    try {
+      const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+      const failedFields = Object.entries(lastFillResults.results)
+        .filter(([fieldId, success]) => !success)
+        .map(([fieldId]) => fieldId);
+
+      if (failedFields.length === 0) {
+        showStatus("No failed fields to debug", "success");
+        return;
+      }
+
+      const debugInfo = await Promise.all(
+        failedFields.map(async (fieldId) => {
+          const response = await chrome.tabs.sendMessage(tab.id, {
+            action: "debugField",
+            fieldId: fieldId,
+          });
+          return { fieldId, debug: response.debug };
+        }),
+      );
+
+      displayDebugInfo(debugInfo);
+    } catch (error) {
+      showStatus("Error debugging fields: " + error.message, "error");
+    }
+  });
 
   // Add keyboard shortcut info
   const instructionsParagraph = document.querySelector(".ai-section p");
   if (instructionsParagraph) {
-    instructionsParagraph.innerHTML +=
-      "<br>5. Use fillFormFields() in console to auto-fill with AI responses";
+    instructionsParagraph.innerHTML = instructionsParagraph.innerHTML.replace(
+      '5. Click "Parse & Fill" to auto-complete the form',
+      '5. Click "Parse & Fill" to auto-complete the form<br>6. View detailed results below',
+    );
   }
 });

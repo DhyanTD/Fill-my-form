@@ -315,16 +315,204 @@ class FormFieldExtractor {
   // Fill field with provided value
   fillField(fieldId, value) {
     const field = this.formFields.find((f) => f.id === fieldId);
-    if (!field) return false;
+    if (!field) {
+      console.log(`Field not found: ${fieldId}`);
+      return { success: false, error: "Field not found" };
+    }
 
     const element = document.querySelector(field.selector);
-    if (!element) return false;
+    if (!element) {
+      console.log(`Element not found for selector: ${field.selector}`);
+      return { success: false, error: "Element not found" };
+    }
 
-    element.value = value;
-    element.dispatchEvent(new Event("input", { bubbles: true }));
-    element.dispatchEvent(new Event("change", { bubbles: true }));
+    try {
+      return this.setElementValue(element, value, field);
+    } catch (error) {
+      console.error(`Error filling field ${fieldId}:`, error);
+      return { success: false, error: error.message };
+    }
+  }
 
-    return true;
+  // Smart element value setting based on element type
+  setElementValue(element, value, field) {
+    const tagName = element.tagName.toLowerCase();
+    const inputType = element.type?.toLowerCase();
+
+    // Handle different element types
+    switch (tagName) {
+      case "input":
+        return this.handleInputElement(element, value, inputType);
+      case "select":
+        return this.handleSelectElement(element, value);
+      case "textarea":
+        return this.handleTextareaElement(element, value);
+      default:
+        return {
+          success: false,
+          error: `Unsupported element type: ${tagName}`,
+        };
+    }
+  }
+
+  // Handle input elements
+  handleInputElement(element, value, inputType) {
+    switch (inputType) {
+      case "checkbox":
+      case "radio":
+        return this.handleCheckboxRadio(element, value);
+      case "date":
+        return this.handleDateInput(element, value);
+      case "email":
+      case "text":
+      case "password":
+      case "tel":
+      case "url":
+      case "search":
+      default:
+        return this.handleTextInput(element, value);
+    }
+  }
+
+  // Handle text inputs
+  handleTextInput(element, value) {
+    // Clear existing value
+    element.value = "";
+    element.focus();
+
+    // Set new value
+    element.value = String(value);
+
+    // Trigger events in sequence for Angular/React compatibility
+    this.triggerEvents(element, ["focus", "input", "change", "blur"]);
+
+    // Special handling for autocomplete fields
+    if (element.classList.contains("ui-autocomplete-input")) {
+      setTimeout(() => {
+        // Try to trigger autocomplete
+        element.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "ArrowDown",
+            bubbles: true,
+          }),
+        );
+        setTimeout(() => {
+          element.dispatchEvent(
+            new KeyboardEvent("keydown", {
+              key: "Enter",
+              bubbles: true,
+            }),
+          );
+        }, 100);
+      }, 100);
+    }
+
+    return { success: true, value: element.value };
+  }
+
+  // Handle checkbox and radio inputs
+  handleCheckboxRadio(element, value) {
+    const shouldCheck =
+      value === true || value === "true" || value === "1" || value === "yes";
+    element.checked = shouldCheck;
+    this.triggerEvents(element, ["change", "click"]);
+    return { success: true, value: element.checked };
+  }
+
+  // Handle date inputs
+  handleDateInput(element, value) {
+    // Try to parse different date formats
+    let dateValue = value;
+
+    if (typeof value === "string") {
+      // Handle common date formats
+      if (value.match(/^\d{2}\/\d{2}\/\d{4}$/)) {
+        // DD/MM/YYYY or MM/DD/YYYY
+        const parts = value.split("/");
+        dateValue = `${parts[2]}-${parts[1].padStart(2, "0")}-${parts[0].padStart(2, "0")}`;
+      } else if (value.match(/^\d{4}-\d{2}-\d{2}$/)) {
+        // Already in YYYY-MM-DD format
+        dateValue = value;
+      }
+    }
+
+    element.value = dateValue;
+    this.triggerEvents(element, ["input", "change"]);
+    return { success: true, value: element.value };
+  }
+
+  // Handle select elements
+  handleSelectElement(element, value) {
+    // Try to find matching option by value or text
+    const options = Array.from(element.options);
+    let selectedOption = null;
+
+    // First try exact value match
+    selectedOption = options.find((opt) => opt.value === String(value));
+
+    // Then try text content match
+    if (!selectedOption) {
+      selectedOption = options.find((opt) =>
+        opt.textContent
+          .trim()
+          .toLowerCase()
+          .includes(String(value).toLowerCase()),
+      );
+    }
+
+    // Try partial match
+    if (!selectedOption) {
+      selectedOption = options.find(
+        (opt) =>
+          String(value)
+            .toLowerCase()
+            .includes(opt.textContent.trim().toLowerCase()) ||
+          opt.textContent
+            .trim()
+            .toLowerCase()
+            .includes(String(value).toLowerCase()),
+      );
+    }
+
+    if (selectedOption) {
+      element.selectedIndex = selectedOption.index;
+      this.triggerEvents(element, ["change"]);
+      return { success: true, value: selectedOption.textContent.trim() };
+    } else {
+      return {
+        success: false,
+        error: `No matching option found for value: ${value}`,
+      };
+    }
+  }
+
+  // Handle textarea elements
+  handleTextareaElement(element, value) {
+    element.value = String(value);
+    this.triggerEvents(element, ["input", "change"]);
+    return { success: true, value: element.value };
+  }
+
+  // Trigger multiple events on an element
+  triggerEvents(element, eventTypes) {
+    eventTypes.forEach((eventType) => {
+      let event;
+      if (eventType === "input") {
+        event = new Event("input", { bubbles: true, cancelable: true });
+      } else if (eventType === "change") {
+        event = new Event("change", { bubbles: true, cancelable: true });
+      } else if (eventType === "focus") {
+        event = new FocusEvent("focus", { bubbles: true });
+      } else if (eventType === "blur") {
+        event = new FocusEvent("blur", { bubbles: true });
+      } else if (eventType === "click") {
+        event = new MouseEvent("click", { bubbles: true, cancelable: true });
+      } else {
+        event = new Event(eventType, { bubbles: true, cancelable: true });
+      }
+
+      element.dispatchEvent(event);
+    });
   }
 }
 
@@ -337,14 +525,67 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const data = formExtractor.prepareForAI();
     sendResponse({ success: true, data: data });
   } else if (request.action === "fillField") {
-    const success = formExtractor.fillField(request.fieldId, request.value);
-    sendResponse({ success: success });
+    const result = formExtractor.fillField(request.fieldId, request.value);
+    sendResponse({ success: result.success, result: result });
   } else if (request.action === "fillMultipleFields") {
     const results = {};
+    const detailedResults = {};
+
     request.fields.forEach(({ fieldId, value }) => {
-      results[fieldId] = formExtractor.fillField(fieldId, value);
+      const result = formExtractor.fillField(fieldId, value);
+      results[fieldId] = result.success;
+      detailedResults[fieldId] = result;
     });
-    sendResponse({ success: true, results: results });
+
+    sendResponse({
+      success: true,
+      results: results,
+      detailedResults: detailedResults,
+      summary: {
+        total: request.fields.length,
+        successful: Object.values(results).filter(Boolean).length,
+        failed: Object.values(results).filter((r) => !r).length,
+      },
+    });
+  } else if (request.action === "debugField") {
+    // Debug specific field
+    const field = formExtractor.formFields.find(
+      (f) => f.id === request.fieldId,
+    );
+    const element = field ? document.querySelector(field.selector) : null;
+
+    sendResponse({
+      success: true,
+      debug: {
+        fieldFound: !!field,
+        elementFound: !!element,
+        fieldData: field,
+        elementInfo: element
+          ? {
+              tagName: element.tagName,
+              type: element.type,
+              value: element.value,
+              classList: Array.from(element.classList),
+              attributes: Array.from(element.attributes).map((attr) => ({
+                name: attr.name,
+                value: attr.value,
+              })),
+            }
+          : null,
+      },
+    });
+  } else if (request.action === "getAllFields") {
+    // Return all current field data for debugging
+    sendResponse({
+      success: true,
+      fields: formExtractor.formFields.map((field) => ({
+        id: field.id,
+        label: field.label,
+        selector: field.selector,
+        type: field.analysis.fieldType,
+        semanticType: field.analysis.semanticType,
+      })),
+    });
   }
 });
 
